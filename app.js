@@ -48,7 +48,9 @@ function buildMongoUri(env) {
   } = env;
 
   if (!MONGO_USER || !MONGO_PASS || !MONGO_HOST) {
-    return "mongodb://127.0.0.1:27017/godsbooklet";
+    throw new Error(
+      "Missing MongoDB configuration. Set MONGO_URI or MONGO_USER/MONGO_PASS/MONGO_HOST."
+    );
   }
 
   const encodedUser = encodeURIComponent(MONGO_USER);
@@ -58,21 +60,24 @@ function buildMongoUri(env) {
   return `${MONGO_SCHEME}://${encodedUser}:${encodedPass}@${MONGO_HOST}/${MONGO_DB}${query}`;
 }
 
-// 从 .env 读取
 const { PORT = 3000 } = process.env;
-const MONGO_URI = buildMongoUri(process.env);
 
-console.log("Mongo URI loaded from environment");
+async function start() {
+  try {
+    const mongoUri = buildMongoUri(process.env);
+    console.log(`Starting API on port ${PORT}`);
+    console.log(`Mongo config mode: ${process.env.MONGO_URI ? "MONGO_URI" : "assembled from parts"}`);
 
-mongoose
-  .connect(MONGO_URI, { serverSelectionTimeoutMS: 10000 })
-  .then(() => {
+    await mongoose.connect(mongoUri, { serverSelectionTimeoutMS: 10000 });
+    console.log("MongoDB connected");
+
     app.listen(PORT, () => {
-      console.log(`API listening on http://localhost:${PORT}`);
+      console.log(`API listening on port ${PORT}`);
     });
-  })
-  .catch((e) => {
-    console.error("Mongo connection failed:", e);
+  } catch (e) {
+    console.error("Startup failed:", e);
     process.exit(1);
-  });
-  
+  }
+}
+
+start();
