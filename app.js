@@ -1,4 +1,4 @@
-import "dotenv/config";
+import dotenv from "dotenv";
 import express from "express";
 import mongoose from "mongoose";
 import roomsRouter from "./routes/rooms.js";
@@ -16,12 +16,48 @@ registerRole(Witch);
 registerRole(Guard);
 registerRole(Villager);
 
+// Load local .env for development. Existing process.env values still win in production.
+dotenv.config();
+
+function parseAllowedOrigins(value) {
+  return String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function createOriginMatcher(entries) {
+  const exact = new Set();
+  const wildcardPatterns = [];
+
+  for (const entry of entries) {
+    if (entry.includes("*")) {
+      const escaped = entry
+        .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+        .replace(/\*/g, ".*");
+      wildcardPatterns.push(new RegExp(`^${escaped}$`));
+      continue;
+    }
+    exact.add(entry);
+  }
+
+  return (origin) => exact.has(origin) || wildcardPatterns.some((pattern) => pattern.test(origin));
+}
+
 const app = express();
 app.use(express.json());
 
-const allowedOrigin = process.env.CORS_ORIGIN || "*";
+const configuredOrigins = parseAllowedOrigins(process.env.CORS_ORIGIN || process.env.CORS_ALLOWED_ORIGINS);
+const isOriginAllowed = createOriginMatcher(configuredOrigins);
+
 app.use((req, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
+  res.setHeader("Vary", "Origin");
+
+  const requestOrigin = req.headers.origin;
+  if (requestOrigin && isOriginAllowed(requestOrigin)) {
+    res.setHeader("Access-Control-Allow-Origin", requestOrigin);
+  }
+
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
   if (req.method === "OPTIONS") return res.sendStatus(204);
@@ -51,6 +87,11 @@ async function start() {
 
     console.log(`Starting API on port ${PORT}`);
     console.log("Mongo config mode: MONGO_URI");
+    console.log(
+      configuredOrigins.length
+        ? `CORS allowed origins: ${configuredOrigins.join(", ")}`
+        : "CORS allowed origins: none configured"
+    );
 
     await mongoose.connect(MONGO_URI, {
       serverSelectionTimeoutMS: 10000,
