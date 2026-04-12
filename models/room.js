@@ -21,6 +21,9 @@ const PlayerSchema = new Schema(
     alive: { type: Boolean, default: true },
     // Guard flag (night protection), transient but persisted for simplicity
     _guarded: { type: Boolean, default: false },
+    // Witch item usage tracking (one-time use only)
+    _witchHealUsed: { type: Boolean, default: false },
+    _witchPoisonUsed: { type: Boolean, default: false },
     // Link to user account (optional)
     userId: { type: Schema.Types.ObjectId, ref: "User", default: null },
   },
@@ -77,6 +80,14 @@ const RoomSchema = new Schema(
 
     // Computed meta snapshot stored on read
     meta: { type: SchemaTypes.Mixed, default: {} },
+
+    // Vote tie-round tracking
+    voteTieState: {
+      sheriffTieRound: { type: Number, default: null },
+      sheriffTiedCandidates: { type: [Number], default: [] },
+      exileTieRound: { type: Number, default: null },
+      exileTiedPlayers: { type: [Number], default: [] },
+    },
   },
   { timestamps: true }
 );

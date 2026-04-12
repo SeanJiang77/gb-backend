@@ -376,6 +376,32 @@ router.post("/:id/step", async (req, res, next) => {
       return res.json(room);
     }
 
+    if (actor === "system" && action === "exile") {
+      if (typeof targetSeat !== "number") throw new HttpError(400, "targetSeat required for exile");
+      const exiled = room.players.find((p) => p.seat === targetSeat);
+      if (!exiled) throw new HttpError(404, `座位 ${targetSeat} 未找到`);
+      if (!exiled.alive) throw new HttpError(409, `座位 ${targetSeat} 已死亡`);
+
+      const undo = { snapshot: createUndoSnapshot(room), removeLogCount: 1 };
+      exiled.alive = false;
+
+      room.log.push({
+        at: new Date(),
+        phase: room.status,
+        actor: "system",
+        targetSeat: targetSeat,
+        payload: { action, undo },
+        note: `放逐 ${targetSeat} 号`
+      });
+
+      const over = isGameOver(room.players);
+      if (over.over) room.status = "end";
+
+      injectMeta(room, room.meta?.mode || "flex");
+      await room.save();
+      return res.json(room);
+    }
+
     // For wolf pack convenience, pick a valid werewolf seat if needed
     let seatNum = typeof actorSeat === "number" ? actorSeat : null;
     if (actor === "werewolves") {

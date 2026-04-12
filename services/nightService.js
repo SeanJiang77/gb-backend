@@ -43,6 +43,21 @@ export function resolveNight(room, actions = {}) {
     }
   }
 
+  /* ===== 女巫项目使用限制 ===== */
+  const witchSeat = roleSeat("witch");
+  if (typeof witchHeal === "number" && witchSeat != null) {
+    const witch = players.find(p => p.seat === witchSeat);
+    if (witch?._witchHealUsed) {
+      throw new HttpError(409, "女巫的解药已使用过，不能再次使用");
+    }
+  }
+  if (typeof witchPoison === "number" && witchSeat != null) {
+    const witch = players.find(p => p.seat === witchSeat);
+    if (witch?._witchPoisonUsed) {
+      throw new HttpError(409, "女巫的毒药已使用过，不能再次使用");
+    }
+  }
+
   /* ===== 女巫首夜自救规则 ===== */
   if (typeof witchHeal === "number") {
     const witchSeat = roleSeat("witch");
@@ -135,6 +150,15 @@ export function resolveNight(room, actions = {}) {
   room.meta = room.meta || {};
   room.meta.lastKilledSeat =
     summary.killed.length === 1 ? summary.killed[0] : null;
+
+  /* ===== 标记女巫已使用的项目 ===== */
+  if (witchSeat != null) {
+    const witch = players.find(p => p.seat === witchSeat);
+    if (witch) {
+      if (typeof witchHeal === "number") witch._witchHealUsed = true;
+      if (typeof witchPoison === "number") witch._witchPoisonUsed = true;
+    }
+  }
 
   return summary;
 }
