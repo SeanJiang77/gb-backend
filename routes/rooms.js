@@ -530,11 +530,15 @@ router.post("/:id/night/resolve", async (req, res, next) => {
       note: "夜晚结算"
     });
 
-    // Optionally advance to day
-    if (actions?.advanceToDay) {
+    const over = isGameOver(room.players);
+    if (over.over) {
+      room.status = "end";
+      room.meta = { ...(room.meta || {}), winner: over.winner };
+    } else if (actions?.advanceToDay) {
       room.status = "day";
     }
 
+    injectMeta(room, room.meta?.mode || "flex");
     await room.save();
     res.json({ room, summary });
   } catch (err) {

@@ -17,6 +17,8 @@ export function resolveNight(room, actions = {}) {
   const witchHeal = actions?.witch?.healTargetSeat ?? null;
   const witchPoison = actions?.witch?.poisonTargetSeat ?? null;
   const isFirstNight = !!actions?.witch?.isFirstNight;
+  const witchUsesHeal = typeof witchHeal === "number";
+  const witchUsesPoison = typeof witchPoison === "number";
 
   /* ===== 校验座位 ===== */
   const seatsToCheck = [
@@ -45,13 +47,16 @@ export function resolveNight(room, actions = {}) {
 
   /* ===== 女巫项目使用限制 ===== */
   const witchSeat = roleSeat("witch");
-  if (typeof witchHeal === "number" && witchSeat != null) {
+  if (witchUsesHeal && witchUsesPoison) {
+    throw new HttpError(409, "女巫每晚最多只能使用一瓶药");
+  }
+  if (witchUsesHeal && witchSeat != null) {
     const witch = players.find(p => p.seat === witchSeat);
     if (witch?._witchHealUsed) {
       throw new HttpError(409, "女巫的解药已使用过，不能再次使用");
     }
   }
-  if (typeof witchPoison === "number" && witchSeat != null) {
+  if (witchUsesPoison && witchSeat != null) {
     const witch = players.find(p => p.seat === witchSeat);
     if (witch?._witchPoisonUsed) {
       throw new HttpError(409, "女巫的毒药已使用过，不能再次使用");
@@ -59,7 +64,7 @@ export function resolveNight(room, actions = {}) {
   }
 
   /* ===== 女巫首夜自救规则 ===== */
-  if (typeof witchHeal === "number") {
+  if (witchUsesHeal) {
     const witchSeat = roleSeat("witch");
     if (
       isFirstNight &&
@@ -82,8 +87,8 @@ export function resolveNight(room, actions = {}) {
   const attempted = {
     wolvesKill: typeof wolvesTarget === "number" ? wolvesTarget : null,
     guardProtect: typeof guardTarget === "number" ? guardTarget : null,
-    witchHeal: typeof witchHeal === "number" ? witchHeal : null,
-    witchPoison: typeof witchPoison === "number" ? witchPoison : null,
+    witchHeal: witchUsesHeal ? witchHeal : null,
+    witchPoison: witchUsesPoison ? witchPoison : null,
     seerCheck: typeof seerTarget === "number" ? seerTarget : null,
   };
 
@@ -148,15 +153,15 @@ export function resolveNight(room, actions = {}) {
 
   /* ===== 写入 meta：昨夜被刀者（供前端使用） ===== */
   room.meta = room.meta || {};
-  room.meta.lastKilledSeat =
-    summary.killed.length === 1 ? summary.killed[0] : null;
+  room.meta.lastKilledSeats = summary.killed;
+  room.meta.lastKilledSeat = summary.killed.length === 1 ? summary.killed[0] : null;
 
   /* ===== 标记女巫已使用的项目 ===== */
   if (witchSeat != null) {
     const witch = players.find(p => p.seat === witchSeat);
     if (witch) {
-      if (typeof witchHeal === "number") witch._witchHealUsed = true;
-      if (typeof witchPoison === "number") witch._witchPoisonUsed = true;
+      if (witchUsesHeal) witch._witchHealUsed = true;
+      if (witchUsesPoison) witch._witchPoisonUsed = true;
     }
   }
 

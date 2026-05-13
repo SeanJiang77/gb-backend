@@ -44,6 +44,26 @@ async function api(baseUrl, path, options = {}) {
   return data;
 }
 
+async function expectApiError(baseUrl, path, options = {}, expectedStatus) {
+  const response = await fetch(new URL(path, baseUrl), {
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+    ...options,
+  });
+
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : null;
+
+  invariant(
+    response.status === expectedStatus,
+    `Expected ${expectedStatus} from ${path}, got ${response.status} ${data?.error || response.statusText}`
+  );
+
+  return data;
+}
+
 async function waitForBackend(baseUrl) {
   const startedAt = Date.now();
   let lastError = null;
@@ -192,6 +212,26 @@ async function runIteration(baseUrl, iteration) {
 
   console.log(`[flow ${iteration}] resolve first night`);
   const firstNightTargets = pickNightTargets(assignedRoom);
+  await expectApiError(
+    baseUrl,
+    `/rooms/${room._id}/night/resolve`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        guard: { targetSeat: firstNightTargets.guardTarget },
+        wolves: { targetSeat: firstNightTargets.wolvesTarget },
+        seer: { targetSeat: firstNightTargets.seerTarget },
+        witch: {
+          healTargetSeat: firstNightTargets.wolvesTarget,
+          poisonTargetSeat: firstNightTargets.poisonTarget,
+          isFirstNight: true,
+        },
+        advanceToDay: true,
+      }),
+    },
+    409
+  );
+
   const firstNight = await resolveNight(baseUrl, room._id, {
     guard: { targetSeat: firstNightTargets.guardTarget },
     wolves: { targetSeat: firstNightTargets.wolvesTarget },
@@ -205,6 +245,9 @@ async function runIteration(baseUrl, iteration) {
   });
 
   invariant(firstNight.room.status === "day", "Room should advance to day after first night resolution");
+  invariant(Array.isArray(firstNight.room.meta?.lastKilledSeats), "Room meta should expose lastKilledSeats as an array");
+  invariant(firstNight.room.meta.lastKilledSeats.length === 0, "First night should be peaceful after witch heal");
+  invariant(firstNight.room.meta.lastKilledSeat == null, "Backwards-compatible lastKilledSeat should be null on peaceful night");
   invariant(
     firstNight.summary.survived.includes(firstNightTargets.wolvesTarget),
     `Expected ${seatLabel(firstNightTargets.wolvesTarget)} to survive first night because of heal`
@@ -235,6 +278,14 @@ async function runIteration(baseUrl, iteration) {
   });
 
   invariant(secondNight.room.status === "day", "Room should advance to day after second night resolution");
+  invariant(
+    Array.isArray(secondNight.room.meta?.lastKilledSeats),
+    "Second night room meta should expose lastKilledSeats as an array"
+  );
+  invariant(
+    secondNight.room.meta.lastKilledSeats.length === secondNight.summary.killed.length,
+    "lastKilledSeats should match the summary killed list"
+  );
   invariant(
     secondNight.summary.killed.includes(secondNightTargets.wolvesTarget),
     `Expected ${seatLabel(secondNightTargets.wolvesTarget)} to die on second night`
