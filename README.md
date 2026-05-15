@@ -5,6 +5,36 @@
 - Models: Room, Player, Rules, Event
 - Matches MVP & Sprint backlog
 
+## v0.4 Stabilization
+
+### Fixed
+- Added game-over checks after night resolution.
+- Enforced the Witch one-potion-per-night rule at the backend source of truth.
+- Added multi-death night result support with `meta.lastKilledSeats`, while keeping `meta.lastKilledSeat` for compatibility.
+- Prevented unresolved vote phases from being skipped by generic phase advancement.
+- Added backend-backed exile vote resolution, including first-round and second-round tie handling.
+- Ensured exiled players are marked eliminated in backend room state.
+- Added backend-backed sheriff election winner, tie, second-round tie, and no-sheriff persistence.
+- Added formal sheriff state in `room.meta.sheriffSeat`, `room.meta.noSheriff`, and `room.meta.sheriffElectionCompleted`.
+- Added sheriff badge transfer and tear-badge flow after sheriff death.
+- Made `GET /rooms/:id` read-only by returning computed meta without saving the room.
+- Fixed CORS env priority for multi-origin deployment.
+
+### Changed
+- Added `npm run test:flow:local` to start the backend, wait for readiness, run the API flow test, and clean up the spawned server.
+- Extended the API flow test to verify vote resolution instead of skipping vote phase.
+- Standardized environment configuration around `MONGO_URI` and multi-origin CORS envs.
+
+### Verification
+- Backend syntax checks should pass for `app.js`, `routes/rooms.js`, `scripts/run-flow-with-server.js`, and `scripts/happy-path-flow.js`.
+- `npm run test:flow:local` should pass locally when `MONGO_URI` is configured.
+- Frontend production build should pass from `gb-frontend` with `npm run build`.
+
+### Known risks
+- Full browser click-path verification is still manual.
+- Smoke-test rooms may remain in MongoDB after verification runs.
+- Some frontend interaction state remains local and can be further backend-backed later.
+
 ## Quick Start
 1. **Install dependencies**
 ```bash
@@ -17,20 +47,22 @@ Render should continue to provide it from deployed env vars, and local developme
 ```
 NODE_ENV=development
 PORT=3000
-CORS_ORIGIN=http://localhost:5173
+CORS_ALLOWED_ORIGINS=http://localhost:5173
+# Optional fallback if multi-origin envs are absent:
+# CORS_ORIGIN=http://localhost:5173
 MONGO_URI=mongodb://127.0.0.1:27017/godsbooklet
 ```
 
 ## CORS
-Use `CORS_ORIGIN` as a comma-separated whitelist of allowed frontend origins.
+Use `CORS_ALLOWED_ORIGINS` as a comma-separated whitelist of allowed frontend origins. `CORS_ORIGINS` is also supported. `CORS_ORIGIN` remains as a backward-compatible single-origin fallback.
 
 Examples:
 ```env
 # Local only
-CORS_ORIGIN=http://localhost:5173
+CORS_ALLOWED_ORIGINS=http://localhost:5173
 
 # Local + Cloudflare preview + production
-CORS_ORIGIN=http://localhost:5173,https://gb-frontend.pages.dev,https://*.gb-frontend.pages.dev,https://godsbooklet.example.com
+CORS_ALLOWED_ORIGINS=http://localhost:5173,https://gb-frontend.pages.dev,https://*.gb-frontend.pages.dev,https://godsbooklet.example.com
 ```
 3. **Run in dev (hot reload)**
 ```bash
@@ -58,7 +90,13 @@ This repo includes a lightweight API-driven flow test for the main moderator wor
 - resolve night again
 - verify room state and logs
 
-Run the backend first, then run the flow test in a second terminal.
+Preferred local verification command:
+
+```bash
+npm run test:flow:local
+```
+
+Manual fallback: run the backend first, then run the flow test in a second terminal.
 
 Commands:
 ```bash

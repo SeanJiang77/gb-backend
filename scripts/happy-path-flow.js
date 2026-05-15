@@ -195,8 +195,32 @@ async function advancePhase(baseUrl, roomId) {
   });
 }
 
+async function resolveVote(baseUrl, roomId, payload) {
+  return api(baseUrl, `/rooms/${roomId}/vote/resolve`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 async function fetchRoom(baseUrl, roomId) {
   return api(baseUrl, `/rooms/${roomId}`);
+}
+
+function pickExileVote(room) {
+  const alive = room.players.filter((player) => player.alive);
+  const target =
+    alive.find((player) => player.role === "villager") ??
+    alive.find((player) => player.role !== "werewolf") ??
+    alive[0];
+  const voter = alive.find((player) => player.seat !== target.seat);
+
+  invariant(target, "Expected an alive exile target");
+  invariant(voter, "Expected an alive voter different from exile target");
+
+  return {
+    targetSeat: target.seat,
+    records: { [voter.seat]: target.seat },
+  };
 }
 
 async function runIteration(baseUrl, iteration) {
@@ -256,8 +280,28 @@ async function runIteration(baseUrl, iteration) {
   console.log(`[flow ${iteration}] advance day -> vote -> night`);
   const voteRoom = await advancePhase(baseUrl, room._id);
   invariant(voteRoom.status === "vote", "Day should advance to vote");
-  assignedRoom = await advancePhase(baseUrl, room._id);
-  invariant(assignedRoom.status === "night", "Vote should advance back to night");
+  await expectApiError(
+    baseUrl,
+    `/rooms/${room._id}/step`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "system",
+        action: "advancePhase",
+      }),
+    },
+    409
+  );
+  const exileVote = pickExileVote(voteRoom);
+  assignedRoom = await resolveVote(baseUrl, room._id, {
+    type: "exile",
+    records: exileVote.records,
+  });
+  invariant(assignedRoom.status === "night", "Resolved exile vote should advance back to night");
+  invariant(
+    assignedRoom.players.find((player) => player.seat === exileVote.targetSeat)?.alive === false,
+    "Resolved exile vote should mark the exiled player dead"
+  );
 
   console.log(`[flow ${iteration}] resolve second night`);
   const secondNightTargets = pickNightTargets(assignedRoom, {

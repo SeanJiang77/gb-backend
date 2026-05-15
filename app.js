@@ -47,7 +47,9 @@ function createOriginMatcher(entries) {
 const app = express();
 app.use(express.json());
 
-const configuredOrigins = parseAllowedOrigins(process.env.CORS_ORIGIN || process.env.CORS_ALLOWED_ORIGINS);
+// Prefer multi-origin envs; keep CORS_ORIGIN as a backward-compatible single-origin fallback.
+const configuredOriginSource = process.env.CORS_ALLOWED_ORIGINS || process.env.CORS_ORIGINS || process.env.CORS_ORIGIN;
+const configuredOrigins = parseAllowedOrigins(configuredOriginSource);
 const isOriginAllowed = createOriginMatcher(configuredOrigins);
 
 app.use((req, res, next) => {

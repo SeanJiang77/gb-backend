@@ -27,6 +27,68 @@ function restoreRoomSnapshot(room, snapshot) {
   room.meta = cloneForLog(snapshot?.meta || {});
 }
 
+function normalizeSeatList(value) {
+  return Array.isArray(value)
+    ? [...new Set(value.map(Number).filter(Number.isInteger))].sort((a, b) => a - b)
+    : [];
+}
+
+function tallyVoteRecords(records = {}, allowedTargets = null, options = {}) {
+  const tally = new Map();
+  const allowed = allowedTargets ? new Set(allowedTargets) : null;
+  const aliveSeats = options.aliveSeats ? new Set(options.aliveSeats) : null;
+  const excludedVoterSeats = options.excludedVoterSeats ? new Set(options.excludedVoterSeats) : null;
+
+  for (const [voterRaw, targetRaw] of Object.entries(records || {})) {
+    const voterSeat = Number(voterRaw);
+    const targetSeat = Number(targetRaw);
+    if (!Number.isInteger(voterSeat) || !Number.isInteger(targetSeat)) {
+      throw new HttpError(400, "Vote records must map voter seats to target seats");
+    }
+    if (aliveSeats && !aliveSeats.has(voterSeat)) {
+      throw new HttpError(409, `Vote voter ${voterSeat} is not alive`);
+    }
+    if (aliveSeats && !aliveSeats.has(targetSeat)) {
+      throw new HttpError(409, `Vote target ${targetSeat} is not alive`);
+    }
+    if (excludedVoterSeats && excludedVoterSeats.has(voterSeat)) {
+      throw new HttpError(409, `Vote voter ${voterSeat} is not eligible in this vote`);
+    }
+    if (voterSeat === targetSeat) {
+      throw new HttpError(409, "Vote voter cannot vote for self");
+    }
+    if (allowed && !allowed.has(targetSeat)) {
+      throw new HttpError(409, `Vote target ${targetSeat} is not eligible in this round`);
+    }
+    tally.set(targetSeat, (tally.get(targetSeat) || 0) + 1);
+  }
+
+  return [...tally.entries()]
+    .map(([seat, count]) => ({ seat, count }))
+    .sort((a, b) => b.count - a.count || a.seat - b.seat);
+}
+
+function topTiedSeats(tally) {
+  if (!tally.length) throw new HttpError(400, "No votes to resolve");
+  const maxVotes = tally[0].count;
+  return tally.filter((item) => item.count === maxVotes).map((item) => item.seat).sort((a, b) => a - b);
+}
+
+function setVoteState(room, voteState) {
+  room.meta = { ...(room.meta || {}), voteState };
+}
+
+function setSheriffState(room, { sheriffSeat = null, noSheriff = false, electionCompleted = false } = {}) {
+  room.meta = {
+    ...(room.meta || {}),
+    sheriffSeat,
+    noSheriff,
+    sheriffElectionCompleted: electionCompleted,
+    sheriffTransferRequired: false,
+    deadSheriffSeat: null,
+  };
+}
+
 function toPlainRoles(mapOrObj) {
   if (!mapOrObj) return {};
   // Detect Map (has forEach and size, but plain objects don't)
@@ -114,9 +176,19 @@ function injectMeta(room, mode = "flex") {
   if (new Set(seats).size !== seats.length) issues.push("Duplicate seats detected");
   if (seats.some((s) => s < 1 || s > room.maxSeats)) issues.push("Seat out of range");
   if (room.players.some((p) => !p.nickname)) issues.push("Nickname missing for some players");
+  const persistedSheriffSeat = Number.isInteger(prevMeta.sheriffSeat) ? prevMeta.sheriffSeat : null;
+  const noSheriff = prevMeta.noSheriff === true;
+  const sheriffElectionCompleted = prevMeta.sheriffElectionCompleted === true || persistedSheriffSeat != null || noSheriff;
+  const sheriffPlayer = persistedSheriffSeat == null ? null : room.players.find((p) => p.seat === persistedSheriffSeat);
+  const sheriffTransferRequired = persistedSheriffSeat != null && sheriffPlayer?.alive === false;
 
   room.meta = {
     ...prevMeta,
+    sheriffSeat: persistedSheriffSeat,
+    noSheriff,
+    sheriffElectionCompleted,
+    sheriffTransferRequired,
+    deadSheriffSeat: sheriffTransferRequired ? persistedSheriffSeat : null,
     expectedPlayers,
     playersNeeded,
     phaseAllowedActors: PHASE_ACTORS[room.status] || [],
@@ -126,6 +198,12 @@ function injectMeta(room, mode = "flex") {
     minPlayers: Math.max(4, nonVillagerCount ? nonVillagerCount(base) : 0),
     currentPlayers: playersCount,
   };
+}
+
+function roomWithComputedMeta(room) {
+  const data = room.toObject ? room.toObject() : cloneForLog(room);
+  injectMeta(data, data.meta?.mode || "flex");
+  return data;
 }
 
 // Create a room
@@ -210,9 +288,7 @@ router.get("/:id", async (req, res, next) => {
   try {
     const room = await Room.findById(req.params.id);
     if (!room) throw new HttpError(404, "Room not found");
-    injectMeta(room, room.meta?.mode || "flex");
-    await room.save();
-    res.json(room);
+    res.json(roomWithComputedMeta(room));
   } catch (err) {
     next(err);
   }
@@ -359,6 +435,10 @@ router.post("/:id/step", async (req, res, next) => {
     if (!room) throw new HttpError(404, "Room not found");
 
     if (actor === "system" && action === "advancePhase") {
+      if (room.status === "vote") {
+        throw new HttpError(409, "Resolve exile vote before advancing from vote phase");
+      }
+
       const undo = { snapshot: createUndoSnapshot(room), removeLogCount: 1 };
       room.log.push({
         at: new Date(),
@@ -377,6 +457,9 @@ router.post("/:id/step", async (req, res, next) => {
     }
 
     if (actor === "system" && action === "exile") {
+      if (room.status === "vote") {
+        throw new HttpError(409, "Resolve exile vote through /vote/resolve");
+      }
       if (typeof targetSeat !== "number") throw new HttpError(400, "targetSeat required for exile");
       const exiled = room.players.find((p) => p.seat === targetSeat);
       if (!exiled) throw new HttpError(404, `座位 ${targetSeat} 未找到`);
@@ -420,6 +503,209 @@ router.post("/:id/step", async (req, res, next) => {
 
     const over = isGameOver(room.players);
     if (over.over) room.status = "end";
+
+    injectMeta(room, room.meta?.mode || "flex");
+    await room.save();
+    res.json(room);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/:id/vote/resolve", async (req, res, next) => {
+  try {
+    const { type = "exile", records = {}, candidates = [] } = req.body || {};
+    const room = await Room.findById(req.params.id);
+    if (!room) throw new HttpError(404, "Room not found");
+    if (!["exile", "sheriff"].includes(type)) throw new HttpError(400, "Invalid vote type");
+
+    const previous = room.meta?.voteState || null;
+    const round = previous?.type === type && previous?.round === 2 && previous?.awaitingResolution ? 2 : 1;
+    const tiedTargets = normalizeSeatList(previous?.tiedTargetSeats);
+    const candidateSeats = normalizeSeatList(candidates);
+    const allowedTargets = round === 2 ? tiedTargets : type === "sheriff" ? candidateSeats : null;
+
+    if (type === "exile" && room.status !== "vote") {
+      throw new HttpError(409, "Exile vote can only be resolved in vote phase");
+    }
+    if (type === "sheriff" && room.status !== "day") {
+      throw new HttpError(409, "Sheriff vote can only be resolved in day phase");
+    }
+    if (type === "sheriff" && round === 1 && candidateSeats.length === 0) {
+      throw new HttpError(400, "Sheriff candidates are required");
+    }
+    if (round === 2 && tiedTargets.length === 0) {
+      throw new HttpError(409, "Second-round vote state is missing tied targets");
+    }
+
+    const aliveSeats = room.players.filter((player) => player.alive).map((player) => player.seat);
+    const aliveSeatSet = new Set(aliveSeats);
+    const invalidAllowedTarget = (allowedTargets || []).find((seat) => !aliveSeatSet.has(seat));
+    if (invalidAllowedTarget != null) {
+      throw new HttpError(409, `Vote target ${invalidAllowedTarget} is not alive`);
+    }
+    const sheriffVoterExclusions = type === "sheriff" ? (round === 2 ? tiedTargets : candidateSeats) : [];
+    const tally = tallyVoteRecords(records, allowedTargets, {
+      aliveSeats,
+      excludedVoterSeats: sheriffVoterExclusions,
+    });
+    const winners = topTiedSeats(tally);
+    const undo = { snapshot: createUndoSnapshot(room), removeLogCount: 1 };
+
+    if (winners.length === 1) {
+      if (type === "exile") {
+        const exiled = room.players.find((p) => p.seat === winners[0]);
+        if (!exiled) throw new HttpError(404, `Seat ${winners[0]} not found`);
+        if (!exiled.alive) throw new HttpError(409, `Seat ${winners[0]} is already dead`);
+
+        exiled.alive = false;
+        const over = isGameOver(room.players);
+        room.status = over.over ? "end" : "night";
+        setVoteState(room, {
+          type,
+          round,
+          tiedTargetSeats: [],
+          awaitingResolution: false,
+          outcome: "exiled",
+          resolvedSeat: winners[0],
+        });
+        if (over.over) room.meta.winner = over.winner;
+
+        room.log.push({
+          at: new Date(),
+          phase: "vote",
+          actor: "system",
+          targetSeat: winners[0],
+          payload: { action: "resolveExileVote", records, tally, round, undo },
+          note: `放逐 ${winners[0]} 号`,
+        });
+      } else {
+        setSheriffState(room, {
+          sheriffSeat: winners[0],
+          noSheriff: false,
+          electionCompleted: true,
+        });
+        setVoteState(room, {
+          type,
+          round,
+          tiedTargetSeats: [],
+          awaitingResolution: false,
+          outcome: "sheriff-elected",
+          resolvedSeat: winners[0],
+        });
+        room.log.push({
+          at: new Date(),
+          phase: room.status,
+          actor: "system",
+          targetSeat: winners[0],
+          payload: { action: "resolveSheriffVote", records, tally, round, undo },
+          note: `警长 ${winners[0]} 号当选`,
+        });
+      }
+    } else if (round === 1) {
+      setVoteState(room, {
+        type,
+        round: 2,
+        tiedTargetSeats: winners,
+        awaitingResolution: true,
+        outcome: "tie",
+      });
+      room.log.push({
+        at: new Date(),
+        phase: room.status,
+        actor: "system",
+        targetSeat: null,
+        payload: { action: type === "exile" ? "exileVoteTie" : "sheriffVoteTie", records, tally, round, undo },
+        note: `${winners.join("、")} 号平票，进入第二轮`,
+      });
+    } else {
+      const phaseBeforeResolution = room.status;
+      if (type === "sheriff") {
+        setSheriffState(room, {
+          sheriffSeat: null,
+          noSheriff: true,
+          electionCompleted: true,
+        });
+      }
+      setVoteState(room, {
+        type,
+        round,
+        tiedTargetSeats: [],
+        awaitingResolution: false,
+        outcome: type === "exile" ? "no-exile" : "no-sheriff",
+      });
+      if (type === "exile") room.status = "night";
+      room.log.push({
+        at: new Date(),
+        phase: phaseBeforeResolution,
+        actor: "system",
+        targetSeat: null,
+        payload: { action: type === "exile" ? "noExileAfterTie" : "noSheriffAfterTie", records, tally, round, undo },
+        note: type === "exile" ? "第二轮仍平票，本轮无人放逐" : "第二轮仍平票，本局无警长",
+      });
+    }
+
+    injectMeta(room, room.meta?.mode || "flex");
+    await room.save();
+    res.json(room);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/:id/sheriff/transfer", async (req, res, next) => {
+  try {
+    const { targetSeat, tearBadge = false } = req.body || {};
+    const room = await Room.findById(req.params.id);
+    if (!room) throw new HttpError(404, "Room not found");
+
+    injectMeta(room, room.meta?.mode || "flex");
+    const deadSheriffSeat = room.meta?.deadSheriffSeat;
+    if (room.meta?.sheriffTransferRequired !== true || !Number.isInteger(deadSheriffSeat)) {
+      throw new HttpError(409, "Sheriff badge transfer is not required");
+    }
+
+    const undo = { snapshot: createUndoSnapshot(room), removeLogCount: 1 };
+
+    if (tearBadge === true) {
+      setSheriffState(room, {
+        sheriffSeat: null,
+        noSheriff: true,
+        electionCompleted: true,
+      });
+      room.log.push({
+        at: new Date(),
+        phase: room.status,
+        actor: "system",
+        targetSeat: null,
+        payload: { action: "tearSheriffBadge", deadSheriffSeat, undo },
+        note: "警徽撕毁，本局无警长",
+      });
+    } else {
+      if (!Number.isInteger(targetSeat)) {
+        throw new HttpError(400, "targetSeat required for sheriff badge transfer");
+      }
+      if (targetSeat === deadSheriffSeat) {
+        throw new HttpError(409, "Cannot transfer sheriff badge to the dead sheriff");
+      }
+      const target = room.players.find((player) => player.seat === targetSeat);
+      if (!target) throw new HttpError(404, `Seat ${targetSeat} not found`);
+      if (!target.alive) throw new HttpError(409, `Seat ${targetSeat} is not alive`);
+
+      setSheriffState(room, {
+        sheriffSeat: targetSeat,
+        noSheriff: false,
+        electionCompleted: true,
+      });
+      room.log.push({
+        at: new Date(),
+        phase: room.status,
+        actor: "system",
+        targetSeat,
+        payload: { action: "transferSheriffBadge", deadSheriffSeat, undo },
+        note: `警徽移交给 ${targetSeat} 号`,
+      });
+    }
 
     injectMeta(room, room.meta?.mode || "flex");
     await room.save();

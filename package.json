@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "nodemon app.js",
     "start": "node app.js",
-    "test:flow": "node ./scripts/happy-path-flow.js"
+    "test:flow": "node ./scripts/happy-path-flow.js",
+    "test:flow:local": "node ./scripts/run-flow-with-server.js"
   },
   "dependencies": {
     "dotenv": "^17.2.2",
