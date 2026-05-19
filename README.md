@@ -36,11 +36,22 @@
 - Some frontend interaction state remains local and can be further backend-backed later.
 
 ## Quick Start
-1. **Install dependencies**
+Required local environment:
+- Node.js 22.12.0
+- npm 10 or newer
+- MongoDB connection string via `MONGO_URI`
+
+1. **Install and select Node.js**
 ```bash
-npm i
+nvm install 22.12.0
+nvm use
 ```
-2. **Set environment (.env)**
+
+2. **Install dependencies**
+```bash
+npm ci
+```
+3. **Set environment (.env)**
 The backend uses one MongoDB environment key in every environment: `MONGO_URI`.
 Render should continue to provide it from deployed env vars, and local development should provide it from `gb-backend/.env`.
 
@@ -64,7 +75,7 @@ CORS_ALLOWED_ORIGINS=http://localhost:5173
 # Local + Cloudflare preview + production
 CORS_ALLOWED_ORIGINS=http://localhost:5173,https://gb-frontend.pages.dev,https://*.gb-frontend.pages.dev,https://godsbooklet.example.com
 ```
-3. **Run in dev (hot reload)**
+4. **Run in dev (hot reload)**
 ```bash
 npm run dev
 ```
@@ -75,7 +86,7 @@ Local startup:
 - do not use old split Mongo settings such as `MONGO_HOST` or `MONGO_USER`
 - run `npm run dev`
 
-4. **Run in prod**
+5. **Run in prod**
 ```bash
 npm start
 ```
@@ -93,6 +104,8 @@ This repo includes a lightweight API-driven flow test for the main moderator wor
 Preferred local verification command:
 
 ```bash
+nvm use
+npm ci
 npm run test:flow:local
 ```
 
